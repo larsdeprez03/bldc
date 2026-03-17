@@ -1,12 +1,11 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WebServer.h>
+#include <ESPAsyncWebServer.h>
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>
 #include <MPU9250.h>
 #include <LittleFS.h>
 
-// --- Configuration ---
 const char* ssid = "IB3";
 const char* password = "ingenieursbeleving3";
 
@@ -15,106 +14,121 @@ const int esc1Pin = 18;
 const int esc2Pin = 19;
 
 MPU9250 mpu;
-WebServer server(80);
+AsyncWebServer server(80);
 
-float pitchOffset = 0.0, rollOffset = 0.0;
+// Store the "zero" positions
+float pitchOff = 0, rollOff = 0, yawOff = 0;
 
-// Helper to serve the HTML file
-void handleRoot() {
-    if (LittleFS.exists("/index.html")) {
-        File file = LittleFS.open("/index.html", "r");
-        server.streamFile(file, "text/html");
-        file.close();
-    } else {
-        server.send(404, "text/plain", "Error: index.html not found on Flash. Did you 'Upload Filesystem Image'?");
-    }
-}
+// --- PID Constants ---
+float Kp = 0.1, Ki = 0.0, Kd = 0.0;
 
-// Endpoint to see what files are actually on the chip
-void handleListFiles() {
-    String str = "Files list:\n";
-    File root = LittleFS.open("/");
-    File file = root.openNextFile();
-    while(file){
-        str += String(file.name()) + " (" + String(file.size()) + " bytes)\n";
-        file = root.openNextFile();
-    }
-    server.send(200, "text/plain", str);
-}
+// --- PID Variables ---
+float targetAngle = 0.0;
+float error, lastError, integral, derivative;
+unsigned long lastPIDTime;
+float pidOutput = 0; 
 
-void handleSetZero() {
-    if (mpu.update()) {
-        pitchOffset = mpu.getPitch();
-        rollOffset = mpu.getRoll();
-        server.send(200, "text/plain", "Zero Set");
-    }
-}
+void computePID() {
+    unsigned long now = millis();
+    float dt = (now - lastPIDTime) / 1000.0;
+    if (dt <= 0) return;
 
-void handleAngles() {
-    if (mpu.update()) {
-        String json = "{\"pitch\":" + String(mpu.getPitch() - pitchOffset) + 
-                      ",\"roll\":" + String(mpu.getRoll() - rollOffset) + "}";
-        server.send(200, "application/json", json);
-    }
-}
+    error = targetAngle - (mpu.getYaw() - yawOff);
 
-void handleThrottle() {
-    if (server.hasArg("motor") && server.hasArg("val")) {
-        int m = server.arg("motor").toInt();
-        int v = server.arg("val").toInt();
-        if (m == 1) esc1.writeMicroseconds(v);
-        else if (m == 2) esc2.writeMicroseconds(v);
-        server.send(200, "text/plain", "OK");
-    }
+    // P Term
+    float P = Kp * error;
+
+    // I Term (Uncomment in code or use sliders to activate)
+    integral += error * dt;
+    float I = Ki * integral;
+
+    // D Term (Uncomment in code or use sliders to activate)
+    derivative = (error - lastError) / dt;
+    float D = Kd * derivative;
+
+    pidOutput = P + I + D;
+
+    if (pidOutput > 100) pidOutput = 100;
+    if (pidOutput < -100) pidOutput = -100;
+
+    lastError = error;
+    lastPIDTime = now;
 }
 
 void setup() {
     Serial.begin(115200);
     Wire.begin();
-
-    // 1. Initialize File System
-    if (!LittleFS.begin(true)) {
-        Serial.println("LittleFS Mount Failed");
-    }
-
-    // 2. Setup Sensors and Motors
+    if (!LittleFS.begin(true)) Serial.println("LittleFS Failed");
     if (!mpu.setup(0x68)) Serial.println("MPU Failed");
+
     ESP32PWM::allocateTimer(0);
     ESP32PWM::allocateTimer(1);
     esc1.attach(esc1Pin, 1000, 2000);
     esc2.attach(esc2Pin, 1000, 2000);
-    esc1.writeMicroseconds(1000);
-    esc2.writeMicroseconds(1000);
 
-    // 3. Connect WiFi
     WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-    
-    // 4. Setup OTA
-    ArduinoOTA.setHostname("ESC-IMU-Controller");
+    while (WiFi.status() != WL_CONNECTED) { delay(500); }
     ArduinoOTA.begin();
 
-    // 5. Routes
-    server.on("/", handleRoot);
-    server.on("/list", handleListFiles); // Secret debug route
-    server.on("/getAngles", handleAngles);
-    server.on("/setZero", handleSetZero);
-    server.on("/setThrottle", handleThrottle);
-    
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(LittleFS, "/index.html", "text/html");
+    });
+
+    server.on("/setZero", HTTP_GET, [](AsyncWebServerRequest *request){
+        pitchOff = mpu.getPitch();
+        rollOff = mpu.getRoll();
+        yawOff = mpu.getYaw();
+        integral = 0; // Reset integral on zeroing
+        request->send(200, "text/plain", "Zeroed");
+    });
+
+    server.on("/getAngles", HTTP_GET, [](AsyncWebServerRequest *request){
+        String json = "{";
+        json += "\"pitch\":" + String(mpu.getPitch() - pitchOff) + ",";
+        json += "\"roll\":" + String(mpu.getRoll() - rollOff) + ",";
+        json += "\"yaw\":" + String(mpu.getYaw() - yawOff) + ",";
+        json += "\"pid\":" + String(pidOutput) + ",";
+        json += "\"ax\":" + String(mpu.getAccX()) + ",";
+        json += "\"ay\":" + String(mpu.getAccY()) + ",";
+        json += "\"az\":" + String(mpu.getAccZ());
+        json += "}";
+        request->send(200, "application/json", json);
+    });
+
+    // PID Tuning Routes
+    server.on("/setKp", HTTP_GET, [](AsyncWebServerRequest *request){
+        if(request->hasArg("val")) Kp = request->arg("val").toFloat();
+        request->send(200);
+    });
+    server.on("/setKi", HTTP_GET, [](AsyncWebServerRequest *request){
+        if(request->hasArg("val")) Ki = request->arg("val").toFloat();
+        request->send(200);
+    });
+    server.on("/setKd", HTTP_GET, [](AsyncWebServerRequest *request){
+        if(request->hasArg("val")) Kd = request->arg("val").toFloat();
+        request->send(200);
+    });
+
+    server.on("/setThrottle", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (request->hasArg("motor") && request->hasArg("val")) {
+            int m = request->arg("motor").toInt();
+            int v = request->arg("val").toInt();
+            if (m == 1) esc1.writeMicroseconds(v);
+            else if (m == 2) esc2.writeMicroseconds(v);
+            request->send(200);
+        }
+    });
+
     server.begin();
-    Serial.println("\nSystem Ready at: " + WiFi.localIP().toString());
 }
 
 void loop() {
-    server.handleClient();
     ArduinoOTA.handle();
     mpu.update();
 
-    // Safety: Stop motors if WiFi drops
-    if (WiFi.status() != WL_CONNECTED) {
-        esc1.writeMicroseconds(1000); 
-        esc2.writeMicroseconds(1000);
-        WiFi.begin(ssid, password);
-        delay(1000);
+    static unsigned long pidTimer = 0;
+    if (millis() - pidTimer >= 10) {
+        computePID();
+        pidTimer = millis();
     }
 }

@@ -2,91 +2,135 @@
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ESP32 3D Orientation</title>
+    <title>ESP32 PID Controller</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #1a1a1a; color: white; margin: 0; padding: 20px; }
-        .container { max-width: 500px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        #canvas-container { width: 100%; height: 300px; background: #111; border-radius: 15px; margin: 15px 0; overflow: hidden; border: 1px solid #444; }
-        .slider { width: 100%; height: 15px; border-radius: 10px; background: #444; outline: none; margin: 10px 0; -webkit-appearance: none; }
-        .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 25px; height: 25px; border-radius: 50%; background: #00adb5; cursor: pointer; border: 3px solid #fff; }
-        .val-display { font-size: 1.5rem; color: #00adb5; font-weight: bold; font-family: monospace; }
-        .btn-zero { background: #ff4d4d; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; }
-        .master-section { border: 2px solid #00adb5; padding: 15px; border-radius: 15px; margin-bottom: 20px; }
+        body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #1a1a1a; color: white; margin: 0; padding: 10px; }
+        .container { max-width: 600px; margin: auto; background: #2d2d2d; padding: 20px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        #canvas-container { width: 100%; height: 200px; background: #111; border-radius: 15px; margin: 15px 0; border: 1px solid #444; }
+        .data-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 15px 0; }
+        .data-card { background: #3d3d3d; padding: 10px; border-radius: 10px; border-bottom: 3px solid #00adb5; }
+        .pid-card { border-bottom: 3px solid #3498db; background: #222; grid-column: span 3; padding: 15px; margin-top: 5px; }
+        .label { font-size: 0.7rem; color: #aaa; display: block; text-transform: uppercase; }
+        .value { font-size: 1.2rem; font-weight: bold; font-family: monospace; }
+        .btn-zero { background: #ff4d4d; color: white; border: none; width: 100%; padding: 12px; border-radius: 10px; cursor: pointer; font-weight: bold; margin-bottom: 15px; }
+        .chart-container { background: #222; padding: 10px; border-radius: 15px; margin: 15px 0; border: 1px solid #444; height: 200px; }
+        .tune-box { border: 2px solid #444; padding: 15px; border-radius: 15px; background: #222; margin-top: 15px; text-align: left; }
+        .slider { width: 100%; margin: 10px 0; cursor: pointer; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>3D ESC Monitor</h1>
+        <h2>IMU & PID CONTROL</h2>
         
         <div id="canvas-container"></div>
-        
-        <div style="margin-bottom: 20px;">
-            <p>Pitch: <span id="pitch" style="color:#ff9f43">0°</span> | Roll: <span id="roll" style="color:#ff9f43">0°</span></p>
-            <button class="btn-zero" onclick="fetch('/setZero')">SET ZERO POINT</button>
+        <button class="btn-zero" onclick="fetch('/setZero')">Zero All Angles</button>
+
+        <div class="data-grid">
+            <div class="data-card"><span class="label">Pitch</span><span class="value" id="pitch">0</span>°</div>
+            <div class="data-card"><span class="label">Roll</span><span class="value" id="roll">0</span>°</div>
+            <div class="data-card" style="border-color: #f1c40f;"><span class="label">Yaw</span><span class="value" id="yaw">0</span>°</div>
+            <div class="data-card pid-card"><span class="label">PID Output (Target: 0°)</span><span class="value" id="pidVal" style="color:#3498db">0</span></div>
         </div>
 
-        <div class="master-section">
-            <h3>MASTER THROTTLE</h3>
-            <div id="valM" class="val-display">1000</div>
+        <div class="chart-container">
+            <canvas id="yawChart"></canvas>
+        </div>
+
+        <div class="tune-box">
+            <h3 style="text-align:center; margin-top:0;">LIVE PID TUNING</h3>
+            <label class="label">Kp: <span id="pkp">0.1</span></label>
+            <input type="range" min="0" max="5" step="0.01" value="0.1" class="slider" id="skp">
+            
+            <label class="label">Ki: <span id="pki">0.0</span></label>
+            <input type="range" min="0" max="1" step="0.001" value="0.0" class="slider" id="ski">
+            
+            <label class="label">Kd: <span id="pkd">0.0</span></label>
+            <input type="range" min="0" max="2" step="0.01" value="0.0" class="slider" id="skd">
+        </div>
+
+        <div style="border: 2px solid #444; padding: 15px; border-radius: 15px; background: #222; margin-top:15px;">
+            <h3>THROTTLE: <span id="valM" style="color:#00adb5">1000</span></h3>
             <input type="range" min="1000" max="2000" value="1000" class="slider" id="sliderM">
-        </div>
-
-        <div style="display: flex; justify-content: space-around;">
-            <div><h4>M1</h4><div id="val1" class="val-display">1000</div></div>
-            <div><h4>M2</h4><div id="val2" class="val-display">1000</div></div>
         </div>
     </div>
 
     <script>
-        // --- 3D SCENE SETUP ---
+        // --- Three.js ---
         const container = document.getElementById('canvas-container');
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const camera = new THREE.PerspectiveCamera(75, container.clientWidth/container.clientHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({antialias: true});
         renderer.setSize(container.clientWidth, container.clientHeight);
         container.appendChild(renderer.domElement);
-
-        // Create a Box (representing your hardware)
-        const geometry = new THREE.BoxGeometry(3, 0.5, 2);
-        const material = [
-            new THREE.MeshBasicMaterial({color: 0x00adb5}), // right
-            new THREE.MeshBasicMaterial({color: 0x00adb5}), // left
-            new THREE.MeshBasicMaterial({color: 0xffffff}), // top (white for orientation)
-            new THREE.MeshBasicMaterial({color: 0x444444}), // bottom
-            new THREE.MeshBasicMaterial({color: 0xff9f43}), // front
-            new THREE.MeshBasicMaterial({color: 0x00adb5})  // back
-        ];
-        const cube = new THREE.Mesh(geometry, material);
+        const cube = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, 2), new THREE.MeshNormalMaterial());
         scene.add(cube);
         camera.position.z = 5;
-
-        function animate() {
-            requestAnimationFrame(animate);
-            renderer.render(scene, camera);
-        }
+        function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
         animate();
 
-        // --- DATA POLLING ---
+        // --- Chart.js ---
+        const ctx = document.getElementById('yawChart').getContext('2d');
+        const yawChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Yaw', data: [], borderColor: '#f1c40f', borderWidth: 2, pointRadius: 0, fill: false, yAxisID: 'y' },
+                    { label: 'PID', data: [], borderColor: '#3498db', borderWidth: 2, pointRadius: 0, fill: false, yAxisID: 'yPID' }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                    x: { display: false },
+                    y: { position: 'left', title: {display:true, text:'Yaw (°)'}, grid: {color:'#444'} },
+                    yPID: { position: 'right', min: -110, max: 110, title: {display:true, text:'PID Output'} }
+                },
+                plugins: { legend: { labels: {color:'#fff'} } }
+            }
+        });
+
+        // --- Loop ---
+        let count = 0;
         setInterval(() => {
             fetch('/getAngles').then(r => r.json()).then(data => {
-                document.getElementById('pitch').innerText = data.pitch.toFixed(1) + "°";
-                document.getElementById('roll').innerText = data.roll.toFixed(1) + "°";
+                document.getElementById('pitch').innerText = data.pitch.toFixed(1);
+                document.getElementById('roll').innerText = data.roll.toFixed(1);
+                document.getElementById('yaw').innerText = data.yaw.toFixed(1);
+                document.getElementById('pidVal').innerText = data.pid.toFixed(2);
 
-                // Convert degrees to Radians for Three.js
-                // Pitch is rotation around X axis, Roll is rotation around Z axis
                 cube.rotation.x = data.pitch * (Math.PI / 180);
-                cube.rotation.z = -data.roll * (Math.PI / 180); 
-            });
-        }, 50); // 20 times per second for smooth motion
+                cube.rotation.y = -data.yaw * (Math.PI / 180); 
+                cube.rotation.z = -data.roll * (Math.PI / 180);
 
-        // --- SLIDER LOGIC ---
-        const sM = document.getElementById("sliderM");
-        sM.oninput = function() {
+                yawChart.data.labels.push(count++);
+                yawChart.data.datasets[0].data.push(data.yaw);
+                yawChart.data.datasets[1].data.push(data.pid);
+                if (yawChart.data.labels.length > 100) {
+                    yawChart.data.labels.shift();
+                    yawChart.data.datasets[0].data.shift();
+                    yawChart.data.datasets[1].data.shift();
+                }
+                yawChart.update('none');
+            });
+        }, 50);
+
+        // --- Tuning Listeners ---
+        function link(sId, pId, route) {
+            document.getElementById(sId).oninput = function() {
+                document.getElementById(pId).innerText = this.value;
+                fetch(`/${route}?val=${this.value}`);
+            }
+        }
+        link("skp", "pkp", "setKp");
+        link("ski", "pki", "setKi");
+        link("skd", "pkd", "setKd");
+
+        document.getElementById("sliderM").oninput = function() {
             let v = this.value;
-            document.getElementById("valM").innerHTML = v;
-            document.getElementById("val1").innerHTML = v;
-            document.getElementById("val2").innerHTML = v;
+            document.getElementById("valM").innerText = v;
             fetch(`/setThrottle?motor=1&val=${v}`);
             fetch(`/setThrottle?motor=2&val=${v}`);
         }
