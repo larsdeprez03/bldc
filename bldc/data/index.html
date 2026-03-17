@@ -40,14 +40,15 @@
 
         <div class="tune-box">
             <h3 style="text-align:center; margin-top:0;">LIVE PID TUNING</h3>
-            <label class="label">Kp: <span id="pkp">0.1</span></label>
-            <input type="range" min="0" max="5" step="0.01" value="0.1" class="slider" id="skp">
             
-            <label class="label">Ki: <span id="pki">0.0</span></label>
+            <label class="label">Kp: <span id="pkp">0.1</span> (Range: 0-20)</label>
+            <input type="range" min="0" max="20" step="0.05" value="0.1" class="slider" id="skp">
+            
+            <label class="label">Ki: <span id="pki">0.0</span> (Range: 0-1)</label>
             <input type="range" min="0" max="1" step="0.001" value="0.0" class="slider" id="ski">
             
-            <label class="label">Kd: <span id="pkd">0.0</span></label>
-            <input type="range" min="0" max="2" step="0.01" value="0.0" class="slider" id="skd">
+            <label class="label">Kd: <span id="pkd">0.0</span> (Range: 0-10)</label>
+            <input type="range" min="0" max="10" step="0.01" value="0.0" class="slider" id="skd">
         </div>
 
         <div style="border: 2px solid #444; padding: 15px; border-radius: 15px; background: #222; margin-top:15px;">
@@ -82,13 +83,34 @@
                 ]
             },
             options: {
-                responsive: true, maintainAspectRatio: false,
+                responsive: true,
+                maintainAspectRatio: false,
                 scales: {
                     x: { display: false },
-                    y: { position: 'left', title: {display:true, text:'Yaw (°)'}, grid: {color:'#444'} },
-                    yPID: { position: 'right', min: -110, max: 110, title: {display:true, text:'PID Output'} }
+                    y: { 
+                        type: 'linear', 
+                        display: true, 
+                        position: 'left',
+                        // --- FIXED RANGE FOR YAW ---
+                        min: -20,
+                        max: 20,
+                        grid: { color: '#444' },
+                        title: { display: true, text: 'Yaw Angle (°)', color: '#f1c40f' }
+                    },
+                    yPID: { 
+                        type: 'linear', 
+                        display: true, 
+                        position: 'right',
+                        // --- FIXED RANGE FOR PID ---
+                        min: -100,
+                        max: 100,
+                        grid: { drawOnChartArea: false }, 
+                        title: { display: true, text: 'PID Output', color: '#3498db' }
+                    }
                 },
-                plugins: { legend: { labels: {color:'#fff'} } }
+                plugins: { 
+                    legend: { labels: { color: '#fff' } } 
+                }
             }
         });
 
